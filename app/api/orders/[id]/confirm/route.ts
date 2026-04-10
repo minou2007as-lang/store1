@@ -1,24 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/db'
+import { supabase, supabaseAdmin } from '@/lib/db'
 import { verifyToken } from '@/lib/auth'
 
 async function releaseOrderFunds(order: any) {
+  const db = supabaseAdmin ?? supabase
+
   if (!order.assigned_seller_id) {
     return { success: false, error: 'Order has no assigned seller' }
   }
 
-  const sellerEarnings = Number(order.seller_earnings ?? 0)
-  const platformFee = Number(order.platform_fee ?? 0)
   const paymentAmount = Number(order.points_amount ?? 0)
-  const payoutAmount = sellerEarnings > 0 ? sellerEarnings : paymentAmount - platformFee
+  const payoutAmount = paymentAmount
 
   if (payoutAmount <= 0) {
     return { success: false, error: 'No seller payout is configured for this order' }
   }
 
-  const { data: sellerUserData, error: sellerUserError } = await (supabase
+  const { data: sellerUserData, error: sellerUserError } = await (db
     .from('users') as any)
-    .select('id, balance, points')
+    .select('id, points')
     .eq('id', order.assigned_seller_id)
     .single()
 
@@ -28,17 +28,12 @@ async function releaseOrderFunds(order: any) {
     return { success: false, error: 'Seller user not found' }
   }
 
-  const previousBalance = Number(sellerUser.balance ?? 0)
   const previousTotalPoints = Number(sellerUser.points ?? 0)
-  const newBalance = previousBalance + payoutAmount
   const newTotalPoints = previousTotalPoints + payoutAmount
 
-  const { error: userUpdateError } = await (supabase
+  const { error: userUpdateError } = await (db
     .from('users') as any)
-    .update({
-      balance: newBalance,
-      points: newTotalPoints,
-    })
+    .update({ points: newTotalPoints })
     .eq('id', sellerUser.id)
 
   if (userUpdateError) {
@@ -46,36 +41,81 @@ async function releaseOrderFunds(order: any) {
     return { success: false, error: 'Unable to credit seller account' }
   }
 
-  const { error: txError } = await (supabase
-    .from('point_transactions') as any)
-    .insert({
+  const txAttempts: Array<Record<string, any>> = [
+    {
       user_id: sellerUser.id,
       amount: payoutAmount,
       transaction_type: 'order',
-      fee: platformFee,
       status: 'completed',
       reference_id: order.id,
       related_order_id: order.id,
       description: 'Order confirmation payout',
-      balance_before: previousBalance,
-      balance_after: newBalance,
-    })
+      balance_before: previousTotalPoints,
+      balance_after: newTotalPoints,
+    },
+    {
+      user_id: sellerUser.id,
+      amount: payoutAmount,
+      type: 'order',
+      status: 'completed',
+      reference_id: order.id,
+    },
+    {
+      user_id: sellerUser.id,
+      amount: payoutAmount,
+      status: 'completed',
+      reference_id: order.id,
+    },
+  ]
+
+  let txError: any = null
+  for (const payload of txAttempts) {
+    const result = await (db
+      .from('point_transactions') as any)
+      .insert(payload)
+    txError = result.error
+    if (!txError) {
+      break
+    }
+  }
 
   if (txError) {
-    console.error('Order payout transaction log error:', txError)
+    console.error('Order payout transaction log error:', JSON.stringify(txError))
     return { success: false, error: 'Unable to record payout transaction' }
   }
 
   const now = new Date().toISOString()
-  const { error: orderUpdateError } = await (supabase
-    .from('orders') as any)
-    .update({
+  const updateAttempts: Array<Record<string, any>> = [
+    {
       status: 'completed',
       confirmed_at: now,
       completed_at: now,
       updated_at: now,
-    })
-    .eq('id', order.id)
+    },
+    {
+      status: 'completed',
+      approved_at: now,
+      completed_at: now,
+      updated_at: now,
+    },
+    {
+      status: 'completed',
+      updated_at: now,
+    },
+  ]
+
+  let orderUpdateError: any = null
+  for (const payload of updateAttempts) {
+    const result = await (db
+      .from('orders') as any)
+      .update(payload)
+      .eq('id', order.id)
+
+    orderUpdateError = result.error
+    if (!orderUpdateError) {
+      break
+    }
+  }
 
   if (orderUpdateError) {
     console.error('Order complete update error:', orderUpdateError)
@@ -104,15 +144,20 @@ export async function POST(
       return NextResponse.json({ error: 'Only customers can confirm delivery' }, { status: 403 })
     }
 
-    const { data: orderData, error: orderError } = await (supabase
+    const db = supabaseAdmin ?? supabase
+
+    const { data: orderData, error: orderError } = await (db
       .from('orders') as any)
-      .select('id, customer_id, assigned_seller_id, delivered_at, confirmed_at, status, points_amount, seller_earnings, platform_fee')
+      .select('*')
       .eq('id', id)
       .single()
 
     const order = orderData as any
 
     if (orderError || !order) {
+      if (orderError) {
+        console.error('Confirm order lookup error:', JSON.stringify(orderError))
+      }
       return NextResponse.json({ error: 'Order not found' }, { status: 404 })
     }
 
@@ -120,11 +165,14 @@ export async function POST(
       return NextResponse.json({ error: 'Only the customer can confirm delivery' }, { status: 403 })
     }
 
-    if (!order.delivered_at) {
+    const deliveredAt = order.delivered_at ?? order.approved_at ?? null
+    const confirmedAt = order.confirmed_at ?? order.completed_at ?? null
+
+    if (!deliveredAt && order.status !== 'delivered') {
       return NextResponse.json({ error: 'Seller has not marked this order as delivered yet' }, { status: 400 })
     }
 
-    if (order.confirmed_at) {
+    if (confirmedAt || order.status === 'completed') {
       return NextResponse.json({ error: 'Delivery is already confirmed' }, { status: 400 })
     }
 

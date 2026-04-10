@@ -6,6 +6,8 @@ export interface AuthPayload {
   email: string;
   username: string;
   role: 'customer' | 'seller' | 'admin';
+  /** Seller profile ID (sellers.id). Present only when role === 'seller'. */
+  seller_id?: string;
 }
 
 export async function hashPassword(password: string): Promise<string> {

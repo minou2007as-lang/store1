@@ -3,6 +3,8 @@ import { supabaseAdmin } from '@/lib/db'
 import { verifyToken } from '@/lib/auth'
 import { z } from 'zod'
 
+const TELEGRAM_TIMEOUT_MS = 3500
+
 const rejectSchema = z.object({
   admin_notes: z.string().trim().min(3).max(500),
 })
@@ -29,6 +31,28 @@ async function insertNotification(
   }
 
   return result.error
+}
+
+async function sendTelegramUserMessage(telegramId: string, text: string) {
+  const token = process.env.TELEGRAM_BOT_TOKEN
+  if (!token || !telegramId) return
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: telegramId,
+      text,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+    }),
+    signal: AbortSignal.timeout(TELEGRAM_TIMEOUT_MS),
+  })
+
+  const body = await response.json().catch(() => null)
+  if (!response.ok || !body?.ok) {
+    throw new Error(`Telegram sendMessage failed: ${response.status} ${JSON.stringify(body)}`)
+  }
 }
 
 export async function POST(
@@ -128,6 +152,30 @@ export async function POST(
 
       if (notesNotificationError) {
         console.error('Top-up rejection notification error:', notesNotificationError)
+      }
+
+      const { data: userRow, error: userRowError } = await supabaseAdmin
+        .from('users')
+        .select('id, telegram_id')
+        .eq('id', topup.user_id)
+        .maybeSingle()
+
+      if (!userRowError && userRow?.telegram_id) {
+        void sendTelegramUserMessage(
+          String(userRow.telegram_id),
+          [
+            '<b>❌ Top-Up Rejected</b>',
+            `Top-Up ID: <code>${id}</code>`,
+            `Reason: ${rejectionReason}`,
+          ].join('\n')
+        ).catch((err) => {
+          console.warn('[TopUp][Reject] Telegram user notify failed:', err instanceof Error ? err.message : String(err))
+        })
+      } else if (!userRowError) {
+        console.warn('[TopUp][Reject] telegram_id is missing; skipping Telegram user notification', {
+          userId: topup.user_id,
+          topupId: id,
+        })
       }
     }
 

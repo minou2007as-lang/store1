@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/db'
 import { verifyToken } from '@/lib/auth'
+import { decryptGameAccountSecret } from '@/lib/game-account-secrets'
+
+function normalizeOrderStatus(status: string) {
+  // Backward compatibility: older callback handlers used "accepted".
+  if (status === 'accepted') return 'in_progress'
+  return status
+}
 
 async function releaseOrderFunds(order: any) {
   if (!order.assigned_seller_id) {
@@ -12,9 +19,8 @@ async function releaseOrderFunds(order: any) {
   }
 
   const sellerEarnings = Number(order.seller_earnings ?? 0)
-  const platformFee = Number(order.platform_fee ?? 0)
   const paymentAmount = Number(order.points_amount ?? 0)
-  const payoutAmount = sellerEarnings > 0 ? sellerEarnings : paymentAmount - platformFee
+  const payoutAmount = sellerEarnings > 0 ? sellerEarnings : paymentAmount
 
   if (payoutAmount <= 0) {
     return { success: false, error: 'No seller payout is configured for this order' }
@@ -128,7 +134,8 @@ export async function GET(
         *,
         seller:assigned_seller_id(username, avatar_url),
         customer:customer_id(username),
-        offer:offer_id(points_price, product:product_id(name, game:game_id(name)))
+        offer:offer_id(name, points_price, product:product_id(name, game:game_id(name))),
+        game_account:game_account_id(id, account_identifier, account_email, account_password_encrypted)
       `)
       .eq('id', id)
       .single()
@@ -157,7 +164,8 @@ export async function GET(
           *,
           seller:assigned_seller_id(username, avatar_url),
           customer:customer_id(username),
-          offer:offer_id(points_price, product:product_id(name, game:game_id(name)))
+          offer:offer_id(name, points_price, product:product_id(name, game:game_id(name))),
+          game_account:game_account_id(id, account_identifier, account_email, account_password_encrypted)
         `)
         .eq('id', id)
         .single()
@@ -170,11 +178,38 @@ export async function GET(
     // 🔒 Hide account before seller picks order
     if (auth.role === 'seller' && auth.id !== order.assigned_seller_id) {
       delete order.game_account_id
+      delete order.game_account
+    } else if (order.game_account) {
+      const decryptedPassword = decryptGameAccountSecret(order.game_account.account_password_encrypted)
+      order.game_account = {
+        ...order.game_account,
+        account_password: decryptedPassword,
+      }
+      delete order.game_account.account_password_encrypted
     }
+
+    const unitPrice = Number(order.offer?.points_price ?? 0)
+    const totalAmount = Number(order.points_amount ?? 0)
+    const quantity = unitPrice > 0 ? Math.max(1, Math.round(totalAmount / unitPrice)) : 1
+    const platformFee = Number(order.platform_fee ?? 0.1)
+    const totalCharge = totalAmount + platformFee
+
+    const deliveredAt = order.delivered_at ?? order.approved_at ?? null
+    const confirmedAt = order.confirmed_at ?? order.completed_at ?? null
+    const normalizedStatus = normalizeOrderStatus(order.status)
+    const displayStatus = normalizedStatus === 'in_progress' && deliveredAt ? 'delivered' : normalizedStatus
 
     return NextResponse.json({
       success: true,
-      order,
+      order: {
+        ...order,
+        quantity,
+        platform_fee: platformFee,
+        total_charge: totalCharge,
+        delivered_at: deliveredAt,
+        confirmed_at: confirmedAt,
+        status: displayStatus,
+      },
     })
   } catch (error) {
     console.error('Get order error:', error)
@@ -208,8 +243,9 @@ export async function PUT(
 
     const body = await request.json()
     const { status } = body
+    const normalizedStatus = normalizeOrderStatus(status)
 
-    if (!status) {
+    if (!normalizedStatus) {
       return NextResponse.json(
         { error: 'Status is required' },
         { status: 400 }
@@ -228,7 +264,7 @@ export async function PUT(
     }
 
     // 🔒 Only assigned seller can mark completed
-    if (status === 'completed' && auth.id !== order.assigned_seller_id) {
+    if (normalizedStatus === 'completed' && auth.id !== order.assigned_seller_id) {
       return NextResponse.json(
         { error: 'Only assigned seller can complete order' },
         { status: 403 }
@@ -249,7 +285,7 @@ export async function PUT(
     const { error: updateError } = await supabase
       .from('orders')
       .update({
-        status,
+        status: normalizedStatus,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)

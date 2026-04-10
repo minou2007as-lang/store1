@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 
 const PRICE_PER_POINT_DZD = 1;
 const MAX_IMAGE_SIZE_MB = 5;
-const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
 type PaymentMethod = {
   id: string;
@@ -175,11 +175,22 @@ export default function TopupPage() {
   useEffect(() => {
     if (!isAdmin || !user) return;
 
-    const timer = setInterval(() => {
+    const poll = () => {
+      if (document.visibilityState !== 'visible') return;
       fetchTopups({ silent: true });
-    }, 6000);
+    };
 
-    return () => clearInterval(timer);
+    const timer = setInterval(poll, 30000);
+    const onFocus = () => fetchTopups({ silent: true });
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', poll);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', poll);
+    };
   }, [isAdmin, user, statusFilter]);
 
   useEffect(() => {
@@ -237,7 +248,7 @@ export default function TopupPage() {
 
   const validateFile = (file: File): string | null => {
     if (!ACCEPTED_TYPES.includes(file.type)) {
-      return 'Only JPG, PNG, and WEBP images are allowed';
+      return 'Only JPG, PNG, WEBP, and GIF images are allowed';
     }
 
     if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {

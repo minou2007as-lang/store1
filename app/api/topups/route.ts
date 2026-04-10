@@ -1,14 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase, supabaseAdmin } from '@/lib/db'
 import { verifyToken } from '@/lib/auth'
+import { ensureBucket, sanitizeStorageFileName } from '@/lib/storage'
 import { z } from 'zod'
 
-const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
 const PRICE_PER_POINT_DZD = 1
 const MIN_TOPUP_POINTS = 100
 const MAX_TOPUP_POINTS = 200000
 const TOPUP_COOLDOWN_MS = 2 * 60 * 1000
+const TELEGRAM_TIMEOUT_MS = 3500
+const TELEGRAM_RETRY_DELAY_MS = 500
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -22,7 +25,116 @@ const topupFormSchema = z.object({
 function getImageExtension(file: File): string {
   if (file.type === 'image/png') return 'png'
   if (file.type === 'image/webp') return 'webp'
+  if (file.type === 'image/gif') return 'gif'
   return 'jpg'
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function classifyNotifyError(error: unknown): { retryable: boolean; message: string } {
+  const message = error instanceof Error ? error.message : String(error)
+  const lower = message.toLowerCase()
+
+  const retryable =
+    lower.includes('timeout') ||
+    lower.includes('network') ||
+    lower.includes('failed to fetch') ||
+    lower.includes('econnreset') ||
+    lower.includes('und_err_connect_timeout') ||
+    lower.includes('429') ||
+    lower.includes('502') ||
+    lower.includes('503') ||
+    lower.includes('504')
+
+  return { retryable, message }
+}
+
+async function sendTelegramMessageWithTimeout(payload: {
+  botToken: string
+  adminChatId: string
+  text: string
+  topupId: string
+}) {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${payload.botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: payload.adminChatId,
+        text: payload.text,
+        parse_mode: 'HTML',
+        disable_web_page_preview: false,
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Approve', callback_data: `topup_approve:${payload.topupId}` },
+              { text: '❌ Reject', callback_data: `topup_reject:${payload.topupId}` },
+            ],
+          ],
+        },
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '')
+      throw new Error(`Telegram HTTP ${response.status}${bodyText ? `: ${bodyText}` : ''}`)
+    }
+
+    const result = await response.json().catch(() => null)
+    if (!result || result.ok !== true) {
+      throw new Error(`Telegram API non-ok response: ${JSON.stringify(result)}`)
+    }
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+async function notifyAdminViaTelegram(payload: {
+  botToken: string
+  adminChatId: string
+  topupId: string
+  username: string
+  amountPoints: number
+  paymentMethodDisplayName: string
+  proofUrl: string
+  transactionReference: string | null
+}) {
+  const telegramText =
+    `💰 <b>New Top-up Request</b>\n\n` +
+    `👤 User: <b>${payload.username}</b>\n` +
+    `🧾 Top-up ID: <code>${payload.topupId}</code>\n` +
+    `💎 Amount: <b>${payload.amountPoints.toLocaleString()} points</b>\n` +
+    `💳 Method: <b>${payload.paymentMethodDisplayName}</b>\n` +
+    (payload.transactionReference ? `🔖 Reference: <code>${payload.transactionReference}</code>\n` : '') +
+    `\n<a href="${payload.proofUrl}">📎 View Receipt</a>`
+
+  try {
+    await sendTelegramMessageWithTimeout({
+      botToken: payload.botToken,
+      adminChatId: payload.adminChatId,
+      text: telegramText,
+      topupId: payload.topupId,
+    })
+  } catch (firstError) {
+    const first = classifyNotifyError(firstError)
+    if (!first.retryable) {
+      throw firstError
+    }
+
+    await sleep(TELEGRAM_RETRY_DELAY_MS + Math.floor(Math.random() * 250))
+    await sendTelegramMessageWithTimeout({
+      botToken: payload.botToken,
+      adminChatId: payload.adminChatId,
+      text: telegramText,
+      topupId: payload.topupId,
+    })
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -179,6 +291,16 @@ export async function POST(request: NextRequest) {
 
     const adminClient = supabaseAdmin
 
+    try {
+      await ensureBucket(adminClient, 'topups', '5MB')
+    } catch (bucketError) {
+      console.error('Top-up storage bucket error:', bucketError)
+      return NextResponse.json(
+        { error: bucketError instanceof Error ? bucketError.message : 'Unable to prepare top-up storage bucket' },
+        { status: 500 }
+      )
+    }
+
     const formData = await request.formData()
     const paymentMethodIdRaw = String(formData.get('payment_method_id') || '').trim()
     const paymentAccountIdRaw = String(formData.get('payment_account_id') || '').trim() || undefined
@@ -222,7 +344,7 @@ export async function POST(request: NextRequest) {
 
     if (!ALLOWED_IMAGE_TYPES.has(proof.type)) {
       return NextResponse.json(
-        { error: 'Only JPG, PNG, or WEBP images are allowed' },
+        { error: 'Only JPG, PNG, WEBP, or GIF images are allowed' },
         { status: 400 }
       )
     }
@@ -356,8 +478,11 @@ export async function POST(request: NextRequest) {
     }
 
     const extension = getImageExtension(proof)
-    const storagePath = `${auth.id}/${Date.now()}-${crypto.randomUUID()}.${extension}`
-    const proofBytes = Buffer.from(await proof.arrayBuffer())
+    const baseName = sanitizeStorageFileName(proof.name.replace(/\.[^.]+$/, ''))
+    const fileName = `${baseName}.${extension}`
+    const storagePath = `topups/${Date.now()}-${fileName}`
+    const bytes = await proof.arrayBuffer()
+    const proofBytes = Buffer.from(bytes)
 
     const { error: uploadError } = await adminClient.storage
       .from('topups')
@@ -424,7 +549,11 @@ export async function POST(request: NextRequest) {
       }
 
       lastInsertError = insertResult.error
-      if (insertResult.error?.code !== '42703') {
+      const isColumnError =
+        insertResult.error?.code === '42703' ||
+        insertResult.error?.message?.toLowerCase().includes('schema cache') ||
+        insertResult.error?.message?.toLowerCase().includes('column')
+      if (!isColumnError) {
         break
       }
     }
@@ -482,7 +611,7 @@ export async function POST(request: NextRequest) {
       console.error('Top-up transaction pending record error:', transactionCreateResult.error)
     }
 
-    const { data: admins, error: adminsError } = await supabase
+    const { data: admins, error: adminsError } = await adminClient
       .from('users')
       .select('id')
       .eq('role', 'admin')
@@ -493,10 +622,11 @@ export async function POST(request: NextRequest) {
     } else {
       await Promise.all(
         (admins ?? []).map(async (admin: any) => {
+          const proofUrl = insertedData.proof_image ?? publicUrlData.publicUrl
           const notificationError = await insertNotification(adminClient, {
             user_id: admin.id,
-            title: 'New top-up request',
-            message: `${auth.username} submitted a top-up request for ${amountPoints.toLocaleString()} points.`,
+            title: `New top-up request from ${auth.username}`,
+            message: `${auth.username} submitted a top-up request for ${amountPoints.toLocaleString()} points. View receipt: ${proofUrl}`,
             type: 'topup',
           })
 
@@ -505,6 +635,26 @@ export async function POST(request: NextRequest) {
           }
         })
       )
+    }
+
+    // Send Telegram message to admin
+    const botToken = process.env.TELEGRAM_BOT_TOKEN
+    const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID
+    if (botToken && adminChatId) {
+      const proofUrl = insertedData.proof_image ?? publicUrlData.publicUrl
+      notifyAdminViaTelegram({
+        botToken,
+        adminChatId,
+        topupId: String(insertedData.id),
+        username: auth.username,
+        amountPoints,
+        paymentMethodDisplayName: (method as PaymentMethodRow).display_name,
+        proofUrl,
+        transactionReference,
+      }).catch((err: any) => {
+        const { message } = classifyNotifyError(err)
+        console.warn('Telegram notification warning:', message)
+      })
     }
 
     return NextResponse.json(

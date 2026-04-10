@@ -40,15 +40,38 @@ export async function GET(request: NextRequest) {
 
     const sellerIds = (sellersRes.data ?? []).map((seller: any) => seller.id)
 
-    const transactionsRes = sellerIds.length
-      ? await supabase
+    let transactionsRes: any = { data: [], error: null }
+    if (sellerIds.length) {
+      transactionsRes = await supabase
+        .from('point_transactions')
+        .select('user_id, amount')
+        .in('user_id', sellerIds)
+        .eq('transaction_type', 'order')
+        .eq('status', 'completed')
+        .gt('amount', 0)
+
+      // Backward compatibility for schemas using `type` instead of
+      // `transaction_type`, and for enums that don't include "order".
+      if (transactionsRes.error && ['42703', 'PGRST204', '22P02'].includes(transactionsRes.error.code)) {
+        transactionsRes = await supabase
           .from('point_transactions')
           .select('user_id, amount')
           .in('user_id', sellerIds)
-          .eq('transaction_type', 'order')
+          .eq('type', 'order')
           .eq('status', 'completed')
           .gt('amount', 0)
-      : { data: [], error: null }
+      }
+
+      // Final fallback: drop transaction type filter entirely.
+      if (transactionsRes.error && ['42703', 'PGRST204', '22P02'].includes(transactionsRes.error.code)) {
+        transactionsRes = await supabase
+          .from('point_transactions')
+          .select('user_id, amount')
+          .in('user_id', sellerIds)
+          .eq('status', 'completed')
+          .gt('amount', 0)
+      }
+    }
 
     const ordersRes = await supabase
       .from('orders')

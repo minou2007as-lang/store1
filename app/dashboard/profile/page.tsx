@@ -26,16 +26,10 @@ type ProfileData = {
   total_reviews?: number;
   assigned_games?: string[];
   assigned_game_ids?: string[];
+  telegram_id?: string | null;
+  telegram_code?: string | null;
+  telegram_linked_at?: string | null;
   created_at: string;
-};
-
-type TopupRequest = {
-  id: string;
-  amount: number;
-  currency: string;
-  status: string;
-  created_at: string;
-  payment_method: string | null;
 };
 
 type Review = {
@@ -62,7 +56,6 @@ export default function ProfilePage() {
     email: user?.email || '',
   });
   const [loading, setLoading] = useState(false);
-  const [topups, setTopups] = useState<TopupRequest[]>([]);
   const [error, setError] = useState('');
   const [availableGames, setAvailableGames] = useState<{ id: string; name: string }[]>([]);
   const [selectedGameIds, setSelectedGameIds] = useState<string[]>([]);
@@ -74,6 +67,11 @@ export default function ProfilePage() {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [reviewsLoading, setReviewsLoading] = useState(false);
   const [reviewsError, setReviewsError] = useState('');
+  const [telegramCode, setTelegramCode] = useState('');
+  const [telegramLoading, setTelegramLoading] = useState(false);
+  const [telegramDeepLink, setTelegramDeepLink] = useState('');
+  const [telegramBotUrl, setTelegramBotUrl] = useState('');
+  const [telegramSuccessMessage, setTelegramSuccessMessage] = useState('');
 
   const loadProfile = async () => {
     const token = localStorage.getItem('auth_token');
@@ -101,18 +99,18 @@ export default function ProfilePage() {
       });
       setBusinessDescription(userProfile.business_description ?? '');
       setSelectedGameIds(userProfile.assigned_game_ids ?? []);
+      setTelegramCode(userProfile.telegram_code ?? '');
 
-      if (user?.role === 'customer') {
-        const topupsRes = await fetch('/api/topups', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (topupsRes.ok) {
-          const topupsData = await topupsRes.json();
-          setTopups(topupsData.topups ?? []);
-        }
-      } else {
-        setTopups([]);
+      const telegramStateRes = await fetch('/api/telegram/link-code', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (telegramStateRes.ok) {
+        const telegramStateData = await telegramStateRes.json();
+        setTelegramDeepLink(telegramStateData.deeplink ?? '');
+        setTelegramBotUrl(telegramStateData.bot_url ?? '');
       }
+
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : 'Failed to fetch profile');
@@ -124,6 +122,27 @@ export default function ProfilePage() {
   useEffect(() => {
     loadProfile();
   }, [user]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (window.location.hash !== '#connect-telegram') {
+      return;
+    }
+
+    const scrollToTelegramCard = () => {
+      const telegramElement = document.getElementById('connect-telegram');
+      if (telegramElement) {
+        telegramElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    };
+
+    // Delay slightly so the conditional card is mounted after profile/user state resolves.
+    const timer = window.setTimeout(scrollToTelegramCard, 150);
+    return () => window.clearTimeout(timer);
+  }, [user?.role, profile?.telegram_id]);
 
   useEffect(() => {
     async function loadGames() {
@@ -144,6 +163,8 @@ export default function ProfilePage() {
       return
     }
 
+    const sellerId = user.id
+
     const token = localStorage.getItem('auth_token')
     if (!token) {
       return
@@ -154,7 +175,7 @@ export default function ProfilePage() {
       setReviewsError('')
 
       try {
-        const response = await fetch(`/api/reviews?seller_id=${user.id}`, {
+        const response = await fetch(`/api/reviews?seller_id=${sellerId}`, {
           headers: { Authorization: `Bearer ${token}` },
         })
 
@@ -256,6 +277,45 @@ export default function ProfilePage() {
   const handleSave = () => {
     setIsEditing(false);
   };
+
+  const handleGenerateTelegramCode = async () => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      setError('Authentication required');
+      return;
+    }
+
+    setTelegramLoading(true);
+    setTelegramSuccessMessage('');
+    try {
+      const response = await fetch('/api/telegram/link-code', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || 'Failed to generate code');
+      }
+
+      setTelegramCode(data.telegram_code ?? '');
+      setTelegramDeepLink(data.deeplink ?? '');
+      setTelegramBotUrl(data.bot_url ?? '');
+      setTelegramSuccessMessage(
+        data?.message || 'Success! Code generated. Open Telegram Bot and send the command below to connect.'
+      );
+      await loadProfile();
+    } catch (err) {
+      console.error('Generate Telegram code error', err);
+      setError(err instanceof Error ? err.message : 'Failed to generate Telegram code');
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
+  const telegramOpenUrl = telegramDeepLink || telegramBotUrl;
 
   return (
     <div className="flex-1 p-8">
@@ -465,37 +525,7 @@ export default function ProfilePage() {
               </CardContent>
             </Card>
 
-            <Card className="mt-6">
-              <CardHeader>
-                <CardTitle>Top-up History</CardTitle>
-                <CardDescription>Requests made for admin approval</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {loading ? (
-                  <div className="py-12 text-center text-slate-500">Loading top-up requests...</div>
-                ) : topups.length > 0 ? (
-                  <div className="space-y-4">
-                    {topups.map((topup) => (
-                      <div key={topup.id} className="flex items-center justify-between p-4 border border-slate-200 rounded-lg">
-                        <div>
-                          <p className="font-medium text-slate-900">{topup.currency.toUpperCase()} top-up</p>
-                          <p className="text-sm text-slate-600">{new Date(topup.created_at).toLocaleDateString()}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-semibold text-slate-900">{topup.amount.toLocaleString()}</p>
-                          <p className="text-xs text-slate-600">{topup.payment_method ?? 'No note'}</p>
-                          <span className="inline-flex mt-2 items-center rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
-                            {topup.status}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="py-12 text-center text-slate-600">No top-up requests yet.</div>
-                )}
-              </CardContent>
-            </Card>            </>          )}
+            </>          )}
 
           <Card className="mt-6">
             <CardHeader>
@@ -564,6 +594,63 @@ export default function ProfilePage() {
                 ) : (
                   <div className="py-8 text-center text-slate-500">No reviews yet.</div>
                 )}
+              </CardContent>
+            </Card>
+          )}
+
+          {(user?.role === 'seller' || user?.role === 'customer') && (
+            <Card id="connect-telegram" className="mt-6 scroll-mt-24">
+              <CardHeader>
+                <CardTitle>Connect Telegram</CardTitle>
+                <CardDescription>
+                  {user?.role === 'seller'
+                    ? 'Get instant order notifications and accept/reject directly from Telegram.'
+                    : 'Connect Telegram to receive notifications and account updates.'}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {telegramSuccessMessage ? (
+                  <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+                    ✅ {telegramSuccessMessage}
+                  </div>
+                ) : null}
+
+                {profile?.telegram_id ? (
+                  <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+                    ✅ Connected (Telegram ID: {profile.telegram_id})
+                    {profile.telegram_linked_at ? (
+                      <div className="mt-1 text-xs text-green-700">
+                        Linked on {new Date(profile.telegram_linked_at).toLocaleString()}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
+                    Not connected yet.
+                  </div>
+                )}
+
+                <Button onClick={handleGenerateTelegramCode} disabled={telegramLoading} className="w-full">
+                  {telegramLoading ? 'Generating...' : 'Generate Code'}
+                </Button>
+
+                {telegramOpenUrl ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => window.open(telegramOpenUrl, '_blank', 'noopener,noreferrer')}
+                  >
+                    Open Telegram Bot
+                  </Button>
+                ) : null}
+
+                {telegramCode ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                    <p className="font-semibold text-slate-900">Send this to the bot:</p>
+                    <p className="mt-2 rounded bg-slate-900 px-2 py-1 font-mono text-slate-100">/start {telegramCode}</p>
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           )}

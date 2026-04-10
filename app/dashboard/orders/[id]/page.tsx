@@ -135,11 +135,22 @@ export default function OrderDetailsPage() {
   useEffect(() => {
     if (!id || !token) return
 
-    const interval = window.setInterval(() => {
+    const poll = () => {
+      if (document.visibilityState !== 'visible') return
       fetchOrder()
-    }, 10000)
+    }
 
-    return () => window.clearInterval(interval)
+    const interval = window.setInterval(poll, 30000)
+    const onFocus = () => fetchOrder()
+
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', poll)
+
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', poll)
+    }
   }, [id, token])
 
   const handleSendMessage = async () => {
@@ -303,7 +314,14 @@ export default function OrderDetailsPage() {
 
   const gameName = order.offer?.product?.game?.name ?? 'Unknown game'
   const productName = order.offer?.product?.name ?? 'Unknown product'
-  const price = order.offer?.points_price ?? order.points_amount
+  const offerName = order.offer?.name ?? productName
+  const baseAmount = Number(order.points_amount ?? 0)
+  const platformFee = Number(order.platform_fee ?? 0.1)
+  const totalCharge = Number(order.total_charge ?? (baseAmount + platformFee))
+  const quantity = Number(order.quantity ?? 1)
+  const accountLabel = order.game_account?.account_identifier ?? 'Not available'
+  const accountEmail = order.game_account?.account_email ?? null
+  const accountPassword = order.game_account?.account_password ?? null
 
   return (
     <div className="p-6 space-y-6">
@@ -331,11 +349,28 @@ export default function OrderDetailsPage() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <p className="text-sm text-slate-500">Order amount</p>
-                  <p className="text-lg font-semibold text-slate-900">{price} pts</p>
+                  <p className="text-lg font-semibold text-slate-900">{baseAmount} pts</p>
+                </div>
+                <div>
+                  <p className="text-sm text-slate-500">Quantity</p>
+                  <p className="text-slate-900">{quantity}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-slate-500">Offer</p>
+                  <p className="text-slate-900">{offerName}</p>
                 </div>
                 <div>
                   <p className="text-sm text-slate-500">Seller</p>
                   <p className="text-slate-900">{order.seller?.username ?? 'Not assigned'}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-slate-500">Game account</p>
+                  <p className="text-slate-900">{accountLabel}</p>
+                  {accountEmail && <p className="text-xs text-slate-500">{accountEmail}</p>}
+                </div>
+                <div>
+                  <p className="text-sm text-slate-500">Account password</p>
+                  <p className="text-slate-900">{accountPassword ?? 'Not available (legacy account or not set)'}</p>
                 </div>
                 <div>
                   <p className="text-sm text-slate-500">Delivered at</p>
@@ -344,6 +379,14 @@ export default function OrderDetailsPage() {
                 <div>
                   <p className="text-sm text-slate-500">Confirmed at</p>
                   <p className="text-slate-900">{formatDate(order.confirmed_at)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-slate-500">Platform fee</p>
+                  <p className="text-slate-900">{platformFee} pts</p>
+                </div>
+                <div>
+                  <p className="text-sm text-slate-500">Total charged</p>
+                  <p className="text-slate-900">{totalCharge} pts</p>
                 </div>
               </div>
 
@@ -514,16 +557,40 @@ export default function OrderDetailsPage() {
                   <span>{gameName}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm text-slate-600">
+                  <span>Offer</span>
+                  <span>{offerName}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm text-slate-600">
+                  <span>Quantity</span>
+                  <span>{quantity}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm text-slate-600">
                   <span>Seller</span>
                   <span>{order.seller?.username ?? 'Unassigned'}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm text-slate-600">
+                  <span>Account</span>
+                  <span>{accountLabel}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm text-slate-600">
+                  <span>Password</span>
+                  <span>{accountPassword ?? 'Not available'}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm text-slate-600">
                   <span>Order status</span>
                   <span>{getStatusLabel(order.status)}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm text-slate-600">
-                  <span>Price</span>
-                  <span>{price} pts</span>
+                  <span>Order amount</span>
+                  <span>{baseAmount} pts</span>
+                </div>
+                <div className="flex items-center justify-between text-sm text-slate-600">
+                  <span>Platform fee</span>
+                  <span>{platformFee} pts</span>
+                </div>
+                <div className="flex items-center justify-between text-sm text-slate-600">
+                  <span>Total charged</span>
+                  <span>{totalCharge} pts</span>
                 </div>
               </div>
             </CardContent>

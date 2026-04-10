@@ -15,6 +15,7 @@ import {
   Award,
   DollarSign,
   Tag,
+  Gamepad2,
 } from 'lucide-react';
 
 type SidebarContentProps = {
@@ -37,6 +38,7 @@ function DashboardNavContent({ onNavigate }: SidebarContentProps) {
     { href: '/dashboard', label: 'Home', icon: Home },
     { href: '/dashboard/marketplace', label: 'Browse Services', icon: ShoppingCart },
     { href: '/dashboard/orders', label: 'My Orders', icon: Briefcase },
+    { href: '/dashboard/accounts', label: 'Game Accounts', icon: Gamepad2 },
     { href: '/dashboard/topup', label: 'Top-up Center', icon: DollarSign },
     { href: '/dashboard/profile', label: 'My Account', icon: Users },
     { href: '/dashboard/settings', label: 'Settings', icon: Settings },
@@ -53,6 +55,7 @@ function DashboardNavContent({ onNavigate }: SidebarContentProps) {
   const adminLinks = [
     { href: '/dashboard', label: 'Home', icon: Home },
     { href: '/dashboard/games', label: 'Manage Games', icon: Award },
+    { href: '/dashboard/admin/products', label: 'Manage Products', icon: Tag },
     { href: '/dashboard/admin/offers', label: 'Manage Offers', icon: Tag },
     { href: '/dashboard/admin/payment-methods', label: 'Payment Methods', icon: DollarSign },
     { href: '/dashboard/users', label: 'Manage Users', icon: Users },

@@ -81,6 +81,34 @@ async function sendToGroup(message, options = {}) {
   return sendMessage(TELEGRAM_GROUP_CHAT_ID, message, options);
 }
 
+async function sendPhoto(chatId, photo, captionOrOptions = {}, maybeOptions = {}) {
+  if (!chatId) {
+    throw new Error('[Telegram] chatId is required to send photo.');
+  }
+
+  if (!photo) {
+    throw new Error('[Telegram] photo is required.');
+  }
+
+  const options =
+    typeof captionOrOptions === 'string'
+      ? { caption: captionOrOptions, ...maybeOptions }
+      : { ...captionOrOptions };
+
+  return telegramRequest('sendPhoto', {
+    chat_id: chatId,
+    photo,
+    ...(options.caption ? { caption: options.caption } : {}),
+    parse_mode: 'HTML',
+    ...options,
+  });
+}
+
+async function sendPhotoToAdmin(photo, captionOrOptions = {}, maybeOptions = {}) {
+  validateRequiredEnv('TELEGRAM_ADMIN_CHAT_ID', TELEGRAM_ADMIN_CHAT_ID);
+  return sendPhoto(TELEGRAM_ADMIN_CHAT_ID, photo, captionOrOptions, maybeOptions);
+}
+
 async function answerCallbackQuery(callbackQueryId, text, showAlert = false) {
   if (!callbackQueryId) {
     throw new Error('[Telegram] callbackQueryId is required.');
@@ -103,12 +131,36 @@ async function editMessageReplyMarkup(chatId, messageId, inlineKeyboard = []) {
   });
 }
 
+async function editMessageText(chatId, messageId, text, options = {}) {
+  return telegramRequest('editMessageText', {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: 'HTML',
+    ...options,
+  });
+}
+
+async function editMessageCaption(chatId, messageId, caption, options = {}) {
+  return telegramRequest('editMessageCaption', {
+    chat_id: chatId,
+    message_id: messageId,
+    caption,
+    parse_mode: 'HTML',
+    ...options,
+  });
+}
+
 module.exports = {
   escapeHtml,
   telegramRequest,
   sendMessage,
   sendToAdmin,
   sendToGroup,
+  sendPhoto,
+  sendPhotoToAdmin,
   answerCallbackQuery,
   editMessageReplyMarkup,
+  editMessageText,
+  editMessageCaption,
 };

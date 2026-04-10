@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query, executeQuery, queryOne } from '@/lib/db';
+import { supabase, supabaseAdmin } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
 import { z } from 'zod';
 
@@ -25,66 +25,74 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { order_id } = pickOrderSchema.parse(body);
 
-    // Check if seller is assigned to this game and is verified
-    const order = await queryOne(
-      `SELECT o.*, p.game_id FROM orders o
-       JOIN offers of ON o.offer_id = of.id
-       JOIN products p ON of.product_id = p.id
-       WHERE o.id = ? AND o.status = 'open'`,
-      [order_id]
-    );
+    const db = supabaseAdmin ?? supabase;
 
-    if (!order) {
+    const { data: order, error: orderError } = await db
+      .from('orders')
+      .select('id, status, assigned_seller_id, points_amount')
+      .eq('id', order_id)
+      .maybeSingle();
+
+    if (orderError || !order) {
       return NextResponse.json({ error: 'Order not found or already picked' }, { status: 404 });
     }
 
-    // Verify seller is assigned to this game
-    const sellerGame = await queryOne(
-      `SELECT sg.id, s.verification_status FROM seller_games sg
-       JOIN sellers s ON sg.seller_id = s.id
-       WHERE s.user_id = ? AND sg.game_id = ?`,
-      [auth.id, order.game_id]
-    );
-
-    if (!sellerGame) {
-      return NextResponse.json({ error: 'You are not assigned to this game' }, { status: 403 });
+    if (order.status !== 'open' || order.assigned_seller_id) {
+      return NextResponse.json({ error: 'Order was already picked by another seller' }, { status: 409 });
     }
 
-    if (sellerGame.verification_status !== 'verified') {
+    const { data: seller, error: sellerError } = await db
+      .from('sellers')
+      .select('id, verification_status')
+      .eq('user_id', auth.id)
+      .maybeSingle();
+
+    if (sellerError || !seller) {
+      return NextResponse.json({ error: 'Seller profile not found' }, { status: 403 });
+    }
+
+    if (seller.verification_status !== 'verified' && seller.verification_status !== 'approved') {
       return NextResponse.json(
         { error: 'Only verified sellers can pick orders' },
         { status: 403 }
       );
     }
 
-    // ATOMIC UPDATE: Only update if status is still 'open'
-    // This ensures only one seller can pick the order
-    const result = await executeQuery(
-      `UPDATE orders 
-       SET assigned_seller_id = ?, status = 'in_progress', picked_at = NOW()
-       WHERE id = ? AND status = 'open'`,
-      [auth.id, order_id]
-    );
+    const { data: pickedOrder, error: pickError } = await db
+      .from('orders')
+      .update({
+        assigned_seller_id: auth.id,
+        status: 'in_progress',
+        picked_at: new Date().toISOString(),
+      })
+      .eq('id', order_id)
+      .eq('status', 'open')
+      .is('assigned_seller_id', null)
+      .select('id, points_amount')
+      .maybeSingle();
 
-    if (result.affectedRows === 0) {
+    if (pickError || !pickedOrder) {
       return NextResponse.json({ error: 'Order was already picked by another seller' }, { status: 409 });
     }
 
-    // Get seller fee percentage
-    const seller = await queryOne(
-      'SELECT fee_percentage FROM sellers WHERE user_id = ?',
-      [auth.id]
-    );
+    // Seller gets full order amount; fees are handled on customer side.
+    const gross = Number(pickedOrder.points_amount ?? order.points_amount ?? 0);
+    const seller_earnings = gross;
 
-    // Calculate seller earnings after fee
-    const fee = Math.ceil(order.points_amount * (seller.fee_percentage / 100));
-    const seller_earnings = order.points_amount - fee;
+    await db
+      .from('orders')
+      .update({ seller_earnings })
+      .eq('id', order_id);
 
-    // Update seller earnings and platform fee
-    await executeQuery(
-      'UPDATE orders SET seller_earnings = ?, platform_fee = ? WHERE id = ?',
-      [seller_earnings, fee, order_id]
-    );
+    await db
+      .from('order_logs')
+      .insert({
+        order_id,
+        seller_id: auth.id,
+        action: 'accept',
+        result: 'success',
+        details: { seller_earnings },
+      });
 
     return NextResponse.json(
       {

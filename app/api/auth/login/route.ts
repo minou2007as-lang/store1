@@ -37,12 +37,24 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 🔑 Generate token
+    // Resolve seller profile ID so callers never need a separate DB lookup.
+    let sellerId: string | undefined
+    if (user.role === 'seller') {
+      const { data: sellerProfile } = await supabase
+        .from('sellers')
+        .select('id')
+        .eq('user_id', user.id)
+        .maybeSingle()
+      sellerId = sellerProfile?.id ?? undefined
+    }
+
+    // Generate token
     const token = generateToken({
       id: user.id,
       email: user.email,
       username: user.username,
       role: user.role,
+      ...(sellerId ? { seller_id: sellerId } : {}),
     })
 
     return NextResponse.json({
@@ -53,6 +65,7 @@ export async function POST(request: NextRequest) {
         email: user.email,
         username: user.username,
         role: user.role,
+        ...(sellerId ? { seller_id: sellerId } : {}),
       },
     })
   } catch (error) {

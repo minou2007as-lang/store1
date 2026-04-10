@@ -29,6 +29,9 @@ type ProfileData = {
 type WithdrawalItem = {
   id: string;
   amount: number;
+  fee_percentage?: number;
+  final_amount?: number;
+  payment_name?: string | null;
   status: string;
   created_at: string;
   processed_at: string | null;
@@ -163,6 +166,7 @@ export default function EarningsPage() {
     }
 
     const bankAccount = window.prompt('Enter your bank account details for payout (optional):')
+    const paymentName = window.prompt('Enter payment name/method (e.g. Vodafone Cash, Bank Transfer):')
 
     try {
       setRequestingWithdrawal(true)
@@ -174,6 +178,7 @@ export default function EarningsPage() {
         },
         body: JSON.stringify({
           amount,
+          payment_name: paymentName?.trim() || undefined,
           bank_account_info: bankAccount?.trim() || undefined,
         }),
       })
@@ -593,6 +598,15 @@ export default function EarningsPage() {
                   </div>
                   <div className="flex flex-wrap gap-4 text-sm text-slate-600">
                     <span>Amount: {withdrawal.amount.toLocaleString()}</span>
+                    {withdrawal.fee_percentage !== undefined && (
+                      <span>Fee: {withdrawal.fee_percentage}%</span>
+                    )}
+                    {withdrawal.final_amount !== undefined && (
+                      <span>Final: {withdrawal.final_amount.toLocaleString()}</span>
+                    )}
+                    {withdrawal.payment_name && (
+                      <span>Payment: {withdrawal.payment_name}</span>
+                    )}
                     <span>Requested: {new Date(withdrawal.created_at).toLocaleDateString()}</span>
                     {withdrawal.processed_at && (
                       <span>Processed: {new Date(withdrawal.processed_at).toLocaleDateString()}</span>

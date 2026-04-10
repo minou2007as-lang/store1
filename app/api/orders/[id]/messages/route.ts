@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/db'
+import { supabase, supabaseAdmin } from '@/lib/db'
 import { verifyToken } from '@/lib/auth'
 import { z } from 'zod'
 
 async function verifyOrderParticipant(orderId: string, userId: string) {
-  const { data: order, error } = await supabase
+  const db = supabaseAdmin ?? supabase
+  const { data: order, error } = await db
     .from('orders')
     .select('id, customer_id, assigned_seller_id')
     .eq('id', orderId)
@@ -25,6 +26,10 @@ async function verifyOrderParticipant(orderId: string, userId: string) {
 const createMessageSchema = z.object({
   content: z.string().trim().min(1),
 })
+
+function getOrderChatTitle(orderId: string) {
+  return `Order Chat #${orderId}`
+}
 
 export async function GET(
   request: NextRequest,
@@ -50,10 +55,13 @@ export async function GET(
       return NextResponse.json({ error: participant.error }, { status: 403 })
     }
 
-    const { data, error } = await supabase
-      .from('order_messages')
-      .select('id, content, created_at, sender:sender_id(username, avatar_url)')
-      .eq('order_id', id)
+    const db = supabaseAdmin ?? supabase
+    const { data, error } = await db
+      .from('notifications')
+      .select('id, message, created_at')
+      .eq('user_id', auth.id)
+      .eq('type', 'order_chat')
+      .eq('title', getOrderChatTitle(id))
       .order('created_at', { ascending: true })
 
     if (error) {
@@ -61,7 +69,23 @@ export async function GET(
       return NextResponse.json({ error: 'Unable to load messages' }, { status: 500 })
     }
 
-    return NextResponse.json({ success: true, messages: data ?? [] })
+    const messages = (data ?? []).map((row: any) => {
+      const raw = String(row.message ?? '')
+      const parts = raw.split(':')
+      const senderName = parts.length > 1 ? parts[0].trim() : 'User'
+      const content = parts.length > 1 ? parts.slice(1).join(':').trim() : raw
+      return {
+        id: row.id,
+        content,
+        created_at: row.created_at,
+        sender: {
+          username: senderName,
+          avatar_url: null,
+        },
+      }
+    })
+
+    return NextResponse.json({ success: true, messages })
   } catch (error) {
     console.error('Load chat messages error:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -95,22 +119,59 @@ export async function POST(
     const body = await request.json()
     const payload = createMessageSchema.parse(body)
 
-    const { data: message, error } = await supabase
-      .from('order_messages')
-      .insert({
-        order_id: id,
-        sender_id: auth.id,
-        content: payload.content,
-      })
-      .select('id, content, created_at, sender:sender_id(username, avatar_url)')
-      .single()
+    const db = supabaseAdmin ?? supabase
+    const order = (participant as any).order
+    const otherUserId = auth.id === order.customer_id ? order.assigned_seller_id : order.customer_id
 
-    if (error || !message) {
-      console.error('Send chat message error:', error)
+    if (!otherUserId) {
+      return NextResponse.json(
+        { error: 'Cannot send message until both participants are assigned' },
+        { status: 400 }
+      )
+    }
+
+    const chatTitle = getOrderChatTitle(id)
+    const chatMessage = `${auth.username}: ${payload.content}`
+
+    const { data: insertedRows, error: insertError } = await db
+      .from('notifications')
+      .insert([
+        {
+          user_id: auth.id,
+          title: chatTitle,
+          message: chatMessage,
+          type: 'order_chat',
+          is_read: false,
+        },
+        {
+          user_id: otherUserId,
+          title: chatTitle,
+          message: chatMessage,
+          type: 'order_chat',
+          is_read: false,
+        },
+      ])
+      .select('id, message, created_at')
+
+    if (insertError || !insertedRows || insertedRows.length === 0) {
+      console.error('Send chat message error:', insertError)
       return NextResponse.json({ error: 'Unable to send message' }, { status: 500 })
     }
 
-    return NextResponse.json({ success: true, message })
+    const selfRow = insertedRows.find((row: any) => row.message === chatMessage) ?? insertedRows[0]
+
+    return NextResponse.json({
+      success: true,
+      message: {
+        id: selfRow.id,
+        content: payload.content,
+        created_at: selfRow.created_at,
+        sender: {
+          username: auth.username,
+          avatar_url: null,
+        },
+      },
+    })
   } catch (error) {
     console.error('Send chat route error:', error)
     if (error instanceof z.ZodError) {

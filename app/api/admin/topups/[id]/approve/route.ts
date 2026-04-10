@@ -3,6 +3,8 @@ import { supabaseAdmin } from '@/lib/db'
 import { verifyToken } from '@/lib/auth'
 import { z } from 'zod'
 
+const TELEGRAM_TIMEOUT_MS = 3500
+
 const approvalSchema = z.object({
   transaction_id: z.string().trim().max(255).optional(),
   admin_notes: z.string().trim().optional(),
@@ -30,6 +32,28 @@ async function insertNotification(
   }
 
   return result.error
+}
+
+async function sendTelegramUserMessage(telegramId: string, text: string) {
+  const token = process.env.TELEGRAM_BOT_TOKEN
+  if (!token || !telegramId) return
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: telegramId,
+      text,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+    }),
+    signal: AbortSignal.timeout(TELEGRAM_TIMEOUT_MS),
+  })
+
+  const body = await response.json().catch(() => null)
+  if (!response.ok || !body?.ok) {
+    throw new Error(`Telegram sendMessage failed: ${response.status} ${JSON.stringify(body)}`)
+  }
 }
 
 export async function POST(
@@ -112,7 +136,7 @@ export async function POST(
 
     const { data: topupUser, error: topupUserError } = await adminClient
       .from('users')
-      .select('id, points')
+      .select('id, points, telegram_id')
       .eq('id', topupPayload.user_id)
       .single()
 
@@ -183,6 +207,25 @@ export async function POST(
         { error: topupUpdateError.message ?? 'Unable to finalize top-up approval' },
         { status: 500 }
       )
+    }
+
+    const userTelegramId = (topupUser as any)?.telegram_id
+    if (userTelegramId) {
+      void sendTelegramUserMessage(
+        String(userTelegramId),
+        [
+          '<b>✅ Top-Up Approved</b>',
+          `Top-Up ID: <code>${id}</code>`,
+          `Amount Added: <b>${amountPoints.toLocaleString()}</b> points`,
+        ].join('\n')
+      ).catch((err) => {
+        console.warn('[TopUp][Approve] Telegram user notify failed:', err instanceof Error ? err.message : String(err))
+      })
+    } else {
+      console.warn('[TopUp][Approve] telegram_id is missing; skipping Telegram user notification', {
+        userId: topupUser.id,
+        topupId: id,
+      })
     }
 
     return NextResponse.json({

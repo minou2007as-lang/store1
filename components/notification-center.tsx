@@ -19,9 +19,33 @@ export function NotificationCenter() {
         return '📦'
       case 'order_completed':
         return '✅'
+      case 'topup':
+        return '💰'
       default:
         return 'ℹ️'
     }
+  }
+
+  // Split message text so any URL becomes a clickable link
+  const renderMessage = (text: string) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g
+    const parts = text.split(urlRegex)
+    return parts.map((part, i) =>
+      urlRegex.test(part) ? (
+        <a
+          key={i}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 underline hover:text-blue-800 break-all"
+          onClick={(e) => e.stopPropagation()}
+        >
+          View receipt ↗
+        </a>
+      ) : (
+        <span key={i}>{part}</span>
+      )
+    )
   }
 
   const handleMarkAsRead = async (id: string) => {
@@ -108,7 +132,7 @@ export function NotificationCenter() {
                           <span className="text-xl flex-shrink-0">{getNotificationIcon(notif.type)}</span>
                           <div className="flex-1 min-w-0">
                             <p className="font-semibold text-sm text-slate-900">{notif.title}</p>
-                            <p className="text-xs text-slate-600 mt-1 line-clamp-2">{notif.content}</p>
+                            <p className="text-xs text-slate-600 mt-1">{renderMessage(notif.message ?? notif.content ?? '')}</p>
                             <p className="text-xs text-slate-400 mt-2">
                               {new Date(notif.created_at).toLocaleTimeString()}
                             </p>

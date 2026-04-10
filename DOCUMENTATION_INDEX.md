@@ -21,6 +21,7 @@ This directory contains comprehensive documentation for the MOHSTORE marketplace
 - **[API_EXAMPLES.md](API_EXAMPLES.md)** - Complete API reference with curl examples
 - **[REFACTORING_SUMMARY.md](REFACTORING_SUMMARY.md)** - Technical changes breakdown
 - **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Quick lookup guide
+- **[UML_SEQUENCE_DIAGRAMS.md](UML_SEQUENCE_DIAGRAMS.md)** - Sequence diagrams for key platform flows
 
 ---
 
@@ -101,6 +102,14 @@ This directory contains comprehensive documentation for the MOHSTORE marketplace
   - Deployment checklist
   - Success metrics
 - **Read if**: You want to know the project status and what's ready
+
+#### 7. **UML_SEQUENCE_DIAGRAMS.md**
+- **Purpose**: Visual interaction flows for core system operations
+- **Contains**:
+  - Authentication and order lifecycle sequence diagrams
+  - Admin and payment operation flows
+  - Presentation-ready **Admin Add Product** diagram reference (`AdminAddProduct.puml`)
+- **Read if**: You need architecture visuals for explanation, review, or presentation
 
 ---
 

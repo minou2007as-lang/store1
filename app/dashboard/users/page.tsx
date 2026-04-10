@@ -19,6 +19,7 @@ type UserItem = {
   is_active: boolean;
   is_verified: boolean;
   verification_status?: string;
+  seller_fee_percentage?: number;
   assigned_games?: string[];
   selected_games?: string[];
   rejection_reason?: string | null;
@@ -37,6 +38,7 @@ type UserEditForm = {
   id: string;
   role: string;
   total_points: string;
+  seller_fee_percentage: string;
   is_active: boolean;
   is_verified: boolean;
 };
@@ -328,6 +330,7 @@ export default function UsersPage() {
       id: userItem.id,
       role: userItem.role,
       total_points: String(userItem.total_points ?? 0),
+      seller_fee_percentage: String(userItem.seller_fee_percentage ?? 10),
       is_active: userItem.is_active,
       is_verified: userItem.is_verified,
     });
@@ -360,6 +363,12 @@ export default function UsersPage() {
       return;
     }
 
+    const sellerFeePercentage = Number(editForm.seller_fee_percentage);
+    if (editForm.role === 'seller' && (!Number.isFinite(sellerFeePercentage) || sellerFeePercentage < 0 || sellerFeePercentage > 100)) {
+      setSaveError('Seller fee must be a number between 0 and 100');
+      return;
+    }
+
     setSaving(true);
     setSaveError('');
 
@@ -374,6 +383,7 @@ export default function UsersPage() {
           id: editForm.id,
           role: editForm.role,
           total_points: totalPoints,
+          seller_fee_percentage: editForm.role === 'seller' ? sellerFeePercentage : undefined,
           is_active: editForm.is_active,
           is_verified: editForm.is_verified,
         }),
@@ -385,7 +395,7 @@ export default function UsersPage() {
       }
 
       setUsers((current) =>
-        current.map((item) => (item.id === data.user.id ? data.user : item))
+        current.map((item) => (item.id === data.user.id ? { ...item, ...data.user } : item))
       );
       setEditingUser(null);
       setEditForm(null);
@@ -516,6 +526,13 @@ export default function UsersPage() {
                       <div className="rounded-lg border border-slate-200 px-3 py-2">
                         <p className="mb-1 text-xs font-semibold uppercase text-slate-500">Points</p>
                         <p className="font-medium text-slate-900">{userItem.total_points}</p>
+                      </div>
+
+                      <div className="rounded-lg border border-slate-200 px-3 py-2">
+                        <p className="mb-1 text-xs font-semibold uppercase text-slate-500">Seller Fee %</p>
+                        <p className="font-medium text-slate-900">
+                          {userItem.role === 'seller' ? (userItem.seller_fee_percentage ?? 10) : '-'}
+                        </p>
                       </div>
 
                       <div className="rounded-lg border border-slate-200 px-3 py-2">
@@ -709,6 +726,25 @@ export default function UsersPage() {
                   }
                 />
               </div>
+
+              {editForm.role === 'seller' && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-slate-900">Seller fee percentage</p>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={editForm.seller_fee_percentage}
+                    onChange={(e) =>
+                      setEditForm((current) =>
+                        current ? { ...current, seller_fee_percentage: e.target.value } : current
+                      )
+                    }
+                  />
+                  <p className="text-xs text-slate-600">Admin-controlled fee used for seller withdrawals.</p>
+                </div>
+              )}
 
               <div className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3">
                 <div>

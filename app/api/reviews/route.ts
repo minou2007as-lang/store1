@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/db'
+import { supabase, supabaseAdmin } from '@/lib/db'
 import { verifyToken } from '@/lib/auth'
 import { z } from 'zod'
 
@@ -11,6 +11,7 @@ const createReviewSchema = z.object({
 
 export async function GET(request: NextRequest) {
   try {
+    const db = supabaseAdmin ?? supabase
     const { searchParams } = new URL(request.url)
     const sellerId = searchParams.get('seller_id')
     const orderId = searchParams.get('order_id')
@@ -22,7 +23,7 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    let query = supabase
+    let query = db
       .from('reviews')
       .select(
         'id, rating, comment, created_at, customer:customer_id(username, avatar_url), seller_id, order_id'
@@ -39,6 +40,31 @@ export async function GET(request: NextRequest) {
     const { data, error } = await query
 
     if (error) {
+      // Backward-compatible fallback: deployments may not have a reviews table.
+      if ((error as any).code === 'PGRST205') {
+        if (sellerId) {
+          const { data: seller, error: sellerError } = await db
+            .from('sellers')
+            .select('average_rating, total_reviews')
+            .eq('user_id', sellerId)
+            .maybeSingle()
+
+          if (sellerError) {
+            console.error('Fetch seller rating fallback error:', sellerError)
+            return NextResponse.json({ error: 'Unable to fetch reviews' }, { status: 500 })
+          }
+
+          return NextResponse.json({
+            success: true,
+            reviews: [],
+            avg_rating: Number((seller as any)?.average_rating ?? 0),
+            total_reviews: Number((seller as any)?.total_reviews ?? 0),
+          })
+        }
+
+        return NextResponse.json({ success: true, reviews: [] })
+      }
+
       console.error('Fetch reviews error:', error)
       return NextResponse.json({ error: 'Unable to fetch reviews' }, { status: 500 })
     }
@@ -68,6 +94,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const db = supabaseAdmin ?? supabase
     const authHeader = request.headers.get('authorization')
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -82,7 +109,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const payload = createReviewSchema.parse(body)
 
-    const { data: order, error: orderError } = await supabase
+    const { data: order, error: orderError } = await db
       .from('orders')
       .select('id, status, customer_id, assigned_seller_id')
       .eq('id', payload.order_id)
@@ -104,13 +131,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Order has no assigned seller' }, { status: 400 })
     }
 
-    const { data: existingReview, error: existingError } = await supabase
+    const { data: existingReview, error: existingError } = await db
       .from('reviews')
       .select('id')
       .eq('order_id', payload.order_id)
       .maybeSingle()
 
     if (existingError) {
+      if ((existingError as any).code === 'PGRST205') {
+        return NextResponse.json(
+          { error: 'Review storage is not configured yet' },
+          { status: 501 }
+        )
+      }
       console.error('Existing review lookup error:', existingError)
       return NextResponse.json({ error: 'Unable to validate existing review' }, { status: 500 })
     }
@@ -127,18 +160,24 @@ export async function POST(request: NextRequest) {
       comment: payload.comment?.trim() || null,
     }
 
-    const { data: insertedReview, error: insertError } = await supabase
+    const { data: insertedReview, error: insertError } = await db
       .from('reviews')
       .insert(reviewData)
       .select('*')
       .single()
 
     if (insertError || !insertedReview) {
+      if ((insertError as any)?.code === 'PGRST205') {
+        return NextResponse.json(
+          { error: 'Review storage is not configured yet' },
+          { status: 501 }
+        )
+      }
       console.error('Insert review error:', insertError)
       return NextResponse.json({ error: 'Unable to save review' }, { status: 500 })
     }
 
-    const { data: reviewStats, error: statsError } = await supabase
+    const { data: reviewStats, error: statsError } = await db
       .from('reviews')
       .select('rating', { count: 'exact' })
       .eq('seller_id', order.assigned_seller_id)
@@ -152,7 +191,7 @@ export async function POST(request: NextRequest) {
         ? Number((ratings.reduce((sum, value) => sum + value, 0) / totalReviews).toFixed(2))
         : 0
 
-      const { error: sellerUpdateError } = await supabase
+      const { error: sellerUpdateError } = await db
         .from('sellers')
         .update({ average_rating: averageRating, total_reviews: totalReviews })
         .eq('user_id', order.assigned_seller_id)

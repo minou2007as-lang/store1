@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { supabase } from '@/lib/db'
 import { RealtimeChannel } from '@supabase/supabase-js'
 
 export interface ChatMessage {
@@ -48,36 +47,8 @@ export function useOrderChat(orderId: string | null, token: string | null) {
   useEffect(() => {
     fetchMessages()
 
-    if (!orderId) return
-
-    // Subscribe to new messages in this order
-    const channel = supabase
-      .channel(`order:${orderId}:messages`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'order_messages',
-        filter: `order_id=eq.${orderId}`,
-      }, (payload: any) => {
-        const newMessage = {
-          id: payload.new.id,
-          content: payload.new.content,
-          created_at: payload.new.created_at,
-          sender: {
-            username: payload.new.sender_id, // Will be replaced by DB trigger/join
-            avatar_url: null,
-          },
-        }
-        setMessages((current) => [...current, newMessage])
-      })
-      .subscribe()
-
-    channelRef.current = channel
-
     return () => {
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current)
-      }
+      channelRef.current = null
     }
   }, [orderId, fetchMessages])
 
@@ -99,6 +70,10 @@ export function useOrderChat(orderId: string | null, token: string | null) {
       const data = await response.json()
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Unable to send message')
+      }
+
+      if (data.message) {
+        setMessages((current) => [...current, data.message])
       }
 
       return data.message

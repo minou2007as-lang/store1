@@ -21,11 +21,13 @@ export async function POST(
       return NextResponse.json({ error: 'Only admins can approve orders' }, { status: 403 });
     }
 
-    const { data: order, error: orderError } = await supabase
-      .from('orders')
+    const { data: orderData, error: orderError } = await (supabase
+      .from('orders') as any)
       .select('id, assigned_seller_id, points_amount, status, seller_earnings')
       .eq('id', id)
       .single();
+
+    const order = orderData as any;
 
     if (orderError || !order) {
       console.error('Order lookup error:', orderError);
@@ -53,25 +55,16 @@ export async function POST(
       );
     }
 
-    const { data: seller, error: sellerError } = await supabase
-      .from('sellers')
-      .select('fee_percentage')
-      .eq('user_id', order.assigned_seller_id)
-      .single();
+    const sellerEarn = Number(order.points_amount);
+    const fee = 0;
 
-    if (sellerError || !seller) {
-      console.error('Seller fee lookup error:', sellerError);
-      return NextResponse.json({ error: 'Seller not found' }, { status: 404 });
-    }
-
-    const fee = Math.ceil(Number(order.points_amount) * (Number(seller.fee_percentage) / 100));
-    const sellerEarn = Number(order.points_amount) - fee;
-
-    const { data: sellerUser, error: sellerUserError } = await supabase
-      .from('users')
+    const { data: sellerUserData, error: sellerUserError } = await (supabase
+      .from('users') as any)
       .select('id, balance, points')
       .eq('id', order.assigned_seller_id)
       .single();
+
+    const sellerUser = sellerUserData as any;
 
     if (sellerUserError || !sellerUser) {
       console.error('Seller user lookup error:', sellerUserError);
@@ -81,8 +74,8 @@ export async function POST(
     const updatedBalance = Number(sellerUser.balance ?? 0) + sellerEarn;
     const updatedTotalPoints = Number(sellerUser.points ?? 0) + sellerEarn;
 
-    const { error: userUpdateError } = await supabase
-      .from('users')
+    const { error: userUpdateError } = await (supabase
+      .from('users') as any)
       .update({
         balance: updatedBalance,
         points: updatedTotalPoints,
@@ -94,8 +87,8 @@ export async function POST(
       return NextResponse.json({ error: userUpdateError.message ?? 'Unable to update seller wallet' }, { status: 500 });
     }
 
-    const { error: transactionError } = await supabase
-      .from('point_transactions')
+    const { error: transactionError } = await (supabase
+      .from('point_transactions') as any)
       .insert({
         user_id: sellerUser.id,
         amount: sellerEarn,
@@ -114,11 +107,11 @@ export async function POST(
       return NextResponse.json({ error: transactionError.message ?? 'Unable to record transaction' }, { status: 500 });
     }
 
-    const { error: orderUpdateError } = await supabase
-      .from('orders')
+    const { error: orderUpdateError } = await (supabase
+      .from('orders') as any)
       .update({
         seller_earnings: sellerEarn,
-        platform_fee: fee,
+        platform_fee: Number(order.platform_fee ?? 0),
         updated_at: new Date().toISOString(),
       })
       .eq('id', order.id);

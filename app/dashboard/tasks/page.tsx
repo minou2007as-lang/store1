@@ -47,10 +47,54 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [sellerStatus, setSellerStatus] = useState<string | null>(null);
+  const [pickingOrderId, setPickingOrderId] = useState<string | null>(null);
 
   const isSeller = user?.role === 'seller';
   const isApprovedSeller = sellerStatus === 'verified' || sellerStatus === 'approved';
   const showApprovalOverlay = sellerStatus !== 'verified' && sellerStatus !== 'approved' && sellerStatus !== null;
+
+  const loadOrders = async (token: string) => {
+    setLoading(true);
+    setError('');
+    try {
+      const [profileRes, availableRes, myTasksRes] = await Promise.all([
+        fetch('/api/users/profile', {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch('/api/orders?filter=available', {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch('/api/orders?filter=my-tasks', {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ]);
+
+      if (!profileRes.ok) {
+        throw new Error('Unable to load seller profile');
+      }
+
+      if (!availableRes.ok || !myTasksRes.ok) {
+        throw new Error('Unable to load task orders');
+      }
+
+      const profileData = await profileRes.json();
+      const availableData = await availableRes.json();
+      const myTasksData = await myTasksRes.json();
+
+      const profile = profileData.user as ProfileData;
+      setSellerStatus(
+        profile.verification_status || (profile.is_verified ? 'approved' : 'pending')
+      );
+
+      setAvailableOrders(availableData.orders ?? []);
+      setMyOrders(myTasksData.orders ?? []);
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch orders');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!isSeller) {
@@ -63,51 +107,41 @@ export default function TasksPage() {
       return;
     }
 
-    async function loadOrders() {
-      setLoading(true);
-      setError('');
-      try {
-        const [profileRes, availableRes, myTasksRes] = await Promise.all([
-          fetch('/api/users/profile', {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-          fetch('/api/orders?filter=available', {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-          fetch('/api/orders?filter=my-tasks', {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-        ]);
+    loadOrders(token);
+  }, [isSeller]);
 
-        if (!profileRes.ok) {
-          throw new Error('Unable to load seller profile');
-        }
-
-        if (!availableRes.ok || !myTasksRes.ok) {
-          throw new Error('Unable to load task orders');
-        }
-
-        const profileData = await profileRes.json();
-        const availableData = await availableRes.json();
-        const myTasksData = await myTasksRes.json();
-
-        const profile = profileData.user as ProfileData;
-        setSellerStatus(
-          profile.verification_status || (profile.is_verified ? 'approved' : 'pending')
-        );
-
-        setAvailableOrders(availableData.orders ?? []);
-        setMyOrders(myTasksData.orders ?? []);
-      } catch (err) {
-        console.error(err);
-        setError(err instanceof Error ? err.message : 'Failed to fetch orders');
-      } finally {
-        setLoading(false);
-      }
+  const handlePickOrder = async (orderId: string) => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      setError('Authentication required');
+      return;
     }
 
-    loadOrders();
-  }, [isSeller]);
+    setPickingOrderId(orderId);
+    setError('');
+    try {
+      const response = await fetch('/api/orders/pick', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ order_id: orderId }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Unable to pick order');
+      }
+
+      await loadOrders(token);
+    } catch (err) {
+      console.error('Pick order error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to pick order');
+    } finally {
+      setPickingOrderId(null);
+    }
+  };
 
   if (!isSeller) {
     return (
@@ -207,8 +241,12 @@ export default function TasksPage() {
                                   <span className="font-bold text-blue-600">{order.points_price} pts</span>
                                 </div>
                               </div>
-                              <Button className="whitespace-nowrap" disabled={sellerStatus !== 'approved'}>
-                                Pick Order
+                              <Button
+                                className="whitespace-nowrap"
+                                disabled={!isApprovedSeller || pickingOrderId === order.id}
+                                onClick={() => handlePickOrder(order.id)}
+                              >
+                                {pickingOrderId === order.id ? 'Picking...' : 'Pick Order'}
                               </Button>
                             </div>
                           </CardContent>

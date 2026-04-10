@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
-import { Loader2, Lock, Save, User } from 'lucide-react';
+import { Loader2, Lock, Save, Send, User } from 'lucide-react';
 
 type ProfileResponse = {
   username: string;
@@ -15,6 +16,7 @@ type ProfileResponse = {
 
 export default function SettingsPage() {
   const { user, updateUser } = useAuth();
+  const router = useRouter();
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [formData, setFormData] = useState({
     username: '',
@@ -283,6 +285,31 @@ export default function SettingsPage() {
                     />
                   </Field>
                 </FieldGroup>
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-xl border border-gray-200 bg-gray-50 text-black dark:border-gray-800 dark:bg-[#020617] dark:text-white">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-black dark:text-white">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-sky-500 text-white">
+                    <Send className="h-3.5 w-3.5" />
+                  </span>
+                  Telegram
+                </CardTitle>
+                <CardDescription className="text-gray-500 dark:text-gray-400">
+                  Connect your Telegram to receive notifications and controls.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="gap-2"
+                  onClick={() => router.push('/dashboard/profile#connect-telegram')}
+                >
+                  <Send className="h-4 w-4 text-sky-500" />
+                  Connect Telegram
+                </Button>
               </CardContent>
             </Card>
 

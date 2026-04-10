@@ -11,6 +11,7 @@ const updateUserSchema = z.object({
   total_points: z.number().finite().min(0),
   is_active: z.boolean(),
   is_verified: z.boolean(),
+  seller_fee_percentage: z.number().finite().min(0).max(100).optional(),
   rejection_reason: z.string().min(1).optional(),
 })
 
@@ -50,12 +51,13 @@ export async function GET(request: NextRequest) {
 
     const verificationMap = new Map<string, string>()
     const rejectionReasonMap = new Map<string, string | null>()
+    const sellerFeeMap = new Map<string, number>()
     const assignedGamesMap = new Map<string, string[]>()
 
     if (sellerUserIds.length > 0) {
       const { data: sellers, error: sellersError } = await supabase
         .from('sellers')
-        .select('id, user_id, verification_status, rejection_reason')
+        .select('id, user_id, verification_status, rejection_reason, fee_percentage')
         .in('user_id', sellerUserIds)
 
       const sellerIdToUserId = new Map<string, string>()
@@ -73,6 +75,7 @@ export async function GET(request: NextRequest) {
             seller.user_id,
             seller.rejection_reason ?? null
           )
+          sellerFeeMap.set(seller.user_id, Number(seller.fee_percentage ?? 10))
         })
       }
 
@@ -144,6 +147,10 @@ export async function GET(request: NextRequest) {
         user.role === 'seller'
           ? rejectionReasonMap.get(user.id) ?? null
           : null,
+      seller_fee_percentage:
+        user.role === 'seller'
+          ? sellerFeeMap.get(user.id) ?? 10
+          : undefined,
       assigned_games: assignedGamesMap.get(user.id) ?? [],
       selected_games: assignedGamesMap.get(user.id) ?? [],
     }))
@@ -286,6 +293,7 @@ export async function PUT(request: NextRequest) {
       const verificationStatus = payload.is_verified ? 'verified' : 'rejected'
       const sellerUpdateData: Record<string, unknown> = {
         verification_status: verificationStatus,
+        fee_percentage: payload.seller_fee_percentage ?? 10,
       }
 
       if (payload.is_verified) {
@@ -311,6 +319,8 @@ export async function PUT(request: NextRequest) {
         total_points: Number(updatedUser.points ?? updatedUser.balance ?? 0),
         is_active: updatedUser.is_active ?? true,
         is_verified: updatedUser.is_verified ?? false,
+        seller_fee_percentage:
+          payload.role === 'seller' ? payload.seller_fee_percentage ?? 10 : undefined,
       },
     })
   } catch (error) {

@@ -5,6 +5,40 @@
 
 ---
 
+## 0. Admin Add Product (Presentation Diagram)
+
+- PlantUML source: `AdminAddProduct.puml`
+- Title: **Admin Add Product**
+- Includes: success path + 401/403/validation errors with presentation colors
+
+```plantuml
+@startuml
+title Admin Add Product
+actor Admin as A
+boundary "Frontend\n(React)" as FE
+control "Backend\n(Next.js API)" as BE
+database "Database\n(PostgreSQL)" as DB
+
+A -> FE : Open Admin Dashboard
+FE -[#2D7FF9]> BE : GET /api/admin/products or /api/games
+BE -> BE : Verify JWT + role=admin
+BE -[#2D7FF9]> DB : Fetch products/games
+DB -[#2D7FF9]> BE : Return list
+BE -[#43A047]> FE : 200 OK + display form
+
+A -> FE : Submit product form
+FE -[#2D7FF9]> BE : POST /api/admin/products
+BE -> BE : Verify + validate
+BE -[#2D7FF9]> DB : Insert product
+DB -[#2D7FF9]> BE : Success
+BE -[#43A047]> FE : 201 Created
+FE -[#43A047]> A : Product added successfully
+
+@enduml
+```
+
+---
+
 ## 1. User Registration
 
 ```mermaid

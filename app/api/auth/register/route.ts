@@ -95,14 +95,19 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // If seller role, create a seller profile
+    // If seller role, create a seller profile and capture its id for the JWT.
+    let sellerId: string | undefined
     if (role === 'seller') {
-      const { error: sellerError } = await supabaseAdmin
+      const { data: sellerProfile, error: sellerError } = await supabaseAdmin
         .from('sellers')
         .insert({ user_id: newUser.id })
+        .select('id')
+        .single()
 
       if (sellerError) {
         console.error('Seller profile creation error:', sellerError)
+      } else {
+        sellerId = sellerProfile?.id ?? undefined
       }
     }
 
@@ -112,6 +117,7 @@ export async function POST(request: NextRequest) {
       email: newUser.email,
       username: newUser.username,
       role: newUser.role,
+      ...(sellerId ? { seller_id: sellerId } : {}),
     })
 
     return NextResponse.json(

@@ -2,10 +2,11 @@
 
 import { useAuth } from '@/lib/auth-context';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Sidebar, { DashboardNavContent } from '@/components/dashboard/sidebar';
 import TopNavbar from '@/components/dashboard/top-navbar';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
+import { supabase } from '@/lib/db';
 
 export default function DashboardLayout({
   children,
@@ -15,12 +16,72 @@ export default function DashboardLayout({
   const { user, isLoading } = useAuth();
   const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const refreshTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!isLoading && !user) {
       router.push('/auth/login');
     }
   }, [user, isLoading, router]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const scheduleRefresh = () => {
+      if (typeof window === 'undefined') return;
+      if (document.visibilityState !== 'visible') return;
+
+      if (refreshTimeoutRef.current) {
+        window.clearTimeout(refreshTimeoutRef.current);
+      }
+
+      // Debounce burst updates so one logical change refreshes only once.
+      refreshTimeoutRef.current = window.setTimeout(() => {
+        router.refresh();
+      }, 700);
+    };
+
+    const channel = supabase
+      .channel(`dashboard-refresh-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'orders',
+          filter: `customer_id=eq.${user.id}`,
+        },
+        scheduleRefresh
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'orders',
+          filter: `assigned_seller_id=eq.${user.id}`,
+        },
+        scheduleRefresh
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        scheduleRefresh
+      )
+      .subscribe();
+
+    return () => {
+      if (refreshTimeoutRef.current) {
+        window.clearTimeout(refreshTimeoutRef.current);
+      }
+      supabase.removeChannel(channel);
+    };
+  }, [router, user?.id]);
 
   if (isLoading) {
     return (

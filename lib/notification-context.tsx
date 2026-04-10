@@ -175,15 +175,30 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       try {
         const insertPayload: any = {
           user_id: userId,
-          ...notification,
+          title: notification.title,
+          type: notification.type,
           message: notification.message || notification.content || '',
           is_read: false,
         }
 
-        const { data, error: insertError } = await (supabase as any)
+        let { error: insertError } = await (supabase as any)
           .from('notifications')
           .insert([insertPayload])
-          .select()
+
+        // Some deployments may not have a `type` column yet.
+        if (insertError?.code === '42703' || insertError?.code === 'PGRST204') {
+          const fallback = await (supabase as any)
+            .from('notifications')
+            .insert([
+              {
+                user_id: userId,
+                title: notification.title,
+                message: notification.message || notification.content || '',
+                is_read: false,
+              },
+            ])
+          insertError = fallback.error
+        }
 
         if (insertError) throw insertError
 

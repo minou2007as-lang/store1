@@ -50,4 +50,22 @@ router.post('/telegram/set-webhook', async (req, res) => {
   }
 });
 
+router.get('/telegram/webhook-info', async (req, res) => {
+  try {
+    const result = await telegramRequest('getWebhookInfo', {});
+
+    return res.status(200).json({
+      success: true,
+      message: 'Webhook info fetched successfully.',
+      data: result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch webhook info.',
+      error: error.message,
+    });
+  }
+});
+
 module.exports = router;
